@@ -12,7 +12,7 @@ def min_max_scale(val, min_val, max_val, is_cost=False):
 def ui_header():
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.title("🏯 Jogja Tourism SPK")
+        st.title("🏯 Jogja Tourism Recommender")
         st.caption("Sistem Pendukung Keputusan · Metode Weighted Product · Reinnent Rasika Z")
     with col2:
         st.metric("Dataset Hotel", "X hotel")  

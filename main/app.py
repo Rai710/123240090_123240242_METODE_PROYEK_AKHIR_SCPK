@@ -18,7 +18,7 @@ except ImportError as e:
     st.stop()
 
 st.set_page_config(
-    page_title="Jogja Tourism SPK",
+    page_title="Jogja Tourism Recommender",
     page_icon="🏯",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -197,10 +197,10 @@ with st.sidebar:
         }
 
 
-# ── HEADER ────────────────────────────────────────────────────────────────────
+# HEADER
 col_ttl, col_stat = st.columns([3, 1])
 with col_ttl:
-    st.title("Jogja Tourism — SPK")
+    st.title("Jogja Tourism — Recommender")
     st.caption("Sistem Pendukung Keputusan · Metode Weighted Product · Reinnent Rasika Z & Tim")
 with col_stat:
     with st.container(border=True):
@@ -441,9 +441,7 @@ elif MODE_B:
             st.info("Tekan tombol di atas untuk memuat peta interaktif.")
 
 
-# ════════════════════════════════════════════════════════════════════════════
 # MODE C
-# ════════════════════════════════════════════════════════════════════════════
 else:
     with tab1:
         st.subheader("Paket Liburan Jogja")
