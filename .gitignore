@@ -1,0 +1,24 @@
+# --- File Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- File Lingkungan/Virtual Env ---
+venv/
+env/
+.env
+
+# --- Streamlit & Cache ---
+.streamlit/
+.cache/
+.streamlit/config.toml
+.streamlit/credentials.toml
+
+# --- Folder Data & Notebook ---
+# Hapus tanda pagar (#) di bawah ini jika dataset/notebook tidak ingin di-upload
+# dataset/
+# .ipynb_checkpoints/
+
+# --- File OS (Penting!) ---
+.DS_Store
+Thumbs.db
