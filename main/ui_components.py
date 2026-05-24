@@ -61,7 +61,7 @@ def draw_radar_chart(df_hasil, labels, keys, costs):
         row = df_hasil.iloc[i]
         skala = [min_max_scale(row[k], min_df[k], max_df[k], is_cost=costs[idx]) for idx, k in enumerate(keys)]
         
-        # PERBAIKAN: Ambil nama berdasarkan jenis data (Wisata atau Hotel) dan pastikan jadi string
+        # PERBAIKAN: Ambil nama berdasarkan jenis data (Wisata atau Hotel)  jadi string
         item_name = row['nama'] if 'nama' in row else row['NAMA PENGINAPAN']
         
         fig.add_trace(go.Scatterpolar(

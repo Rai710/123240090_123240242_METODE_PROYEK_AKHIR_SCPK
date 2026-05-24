@@ -134,7 +134,6 @@ def rekomendasi_wisata_global(bobot_user, kategori=None, keyword=None, budget_mi
     bobot_aktif = {k: v for k, v in bobot_user.items() if k in jenis_kri}
     
     return core_weighted_product(df_dinamis, bobot_aktif, jenis_kri, sort_order)
-# FITUR ADVANCED: ITINERARY & SENSITIVITAS
 
 def buat_paket_itinerary(nama_hotel, bobot_user, radius_km=15):
     """Membuat paket rute 3 wisata terdekat dari hotel"""

@@ -28,7 +28,7 @@ def core_weighted_product(df_alternatif, bobot, jenis_kriteria, sort_order='desc
         w = bobot_normal[kriteria]
         if jenis_kriteria[kriteria] == 'cost':
             w = -w
-        # Hindari nilai 0 agar tidak error pangkat negatif
+        
         nilai_kolom = df_wp[kriteria].replace(0, 0.01)
         S *= nilai_kolom ** w
         

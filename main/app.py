@@ -1,299 +1,513 @@
-# app.py — SPK Wisata DIY (Pure Python + Tabel + Popup & Redirect)
+# app.py — SPK Wisata DIY · Native Streamlit
 import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-from streamlit_extras.metric_cards import style_metric_cards
 
 try:
     from main import (
-        df_hotel, df_wisata_final, rekomendasi_wisata_dari_hotel, 
-        rekomendasi_hotel_dari_wisata, rekomendasi_wisata_global
+        df_hotel, df_wisata_final,
+        rekomendasi_wisata_dari_hotel,
+        rekomendasi_hotel_dari_wisata,
+        rekomendasi_wisata_global,
+        hitung_analisis_sensitivitas,
     )
-    from ui_components import (
-        ui_header, ui_section, ui_card_juara, draw_radar_chart
-    )
+    from ui_components import draw_radar_chart
 except ImportError as e:
     st.error(f"Gagal memuat modul: {e}")
     st.stop()
 
-st.set_page_config(page_title="Jogja Tourism SPK", page_icon="🏯", layout="wide")
+st.set_page_config(
+    page_title="Jogja Tourism SPK",
+    page_icon="🏯",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# ── 1. MANAJEMEN SESI (STATE) ───────────────────────────────────────────────
-# Ini fungsinya agar kita bisa pindah-pindah mode lewat tombol Pop-up
-if 'active_mode' not in st.session_state:
-    st.session_state.active_mode = "🎒 Belum ada rencana"
-if 'target_wisata' not in st.session_state:
-    st.session_state.target_wisata = None
-if 'hasil_paket' not in st.session_state:
-    st.session_state.hasil_paket = pd.DataFrame()
+# SESSION STATE
+if "active_mode"    not in st.session_state: st.session_state.active_mode    = "Sudah punya hotel"
+if "target_wisata"  not in st.session_state: st.session_state.target_wisata  = None
+if "hasil_paket"    not in st.session_state: st.session_state.hasil_paket    = pd.DataFrame()
 
-# ── 2. FUNGSI POP-UP (DIALOG) ───────────────────────────────────────────────
-@st.dialog("🔍 Detail Destinasi & Lanjut Cari Hotel")
+
+# HELPER: SEARCH SELECTBOX
+def search_selectbox(label, options, default_value=None, key_prefix=""):
+    """Text input + filtered selectbox — meniru perilaku autocomplete."""
+    query = st.text_input(label, placeholder="Ketik nama untuk mencari…", key=f"{key_prefix}_query")
+    filtered = [o for o in options if query.lower() in o.lower()] if query else options
+
+    if not filtered:
+        st.caption("Tidak ada hasil yang cocok.")
+        return default_value
+
+    # Tentukan index default
+    def_idx = 0
+    if default_value and default_value in filtered:
+        def_idx = filtered.index(default_value)
+
+    return st.selectbox(
+        f"Hasil pencarian ({len(filtered)} ditemukan)" if query else "Pilih dari daftar",
+        filtered,
+        index=def_idx,
+        key=f"{key_prefix}_select",
+        label_visibility="collapsed",
+    )
+
+
+# POPUP DIALOG
+@st.dialog("Detail Destinasi")
 def popup_detail_wisata(w_row):
-    st.write(f"### {w_row['nama']}")
-    st.write(f"**Kategori:** {w_row.get('type', '-')}")
-    st.write(f"**Rating:** ⭐ {w_row['vote_average']} ({int(w_row['vote_count'])} ulasan)")
-    st.write(f"**Harga Tiket:** Rp {int(w_row['harga_tiket']):,}")
-    st.write(f"**Jarak dari Pusat Kota:** {w_row['jarak_pusat_km']:.2f} km")
-    
+    st.subheader(w_row["nama"])
+    a, b = st.columns(2)
+    a.metric("Kategori",         w_row.get("type", "—"))
+    b.metric("Rating",           f"{w_row['vote_average']:.1f} / 5")
+    a.metric("Harga Tiket",      f"Rp {int(w_row['harga_tiket']):,}")
+    b.metric("Jarak Pusat Kota", f"{w_row['jarak_pusat_km']:.1f} km")
+    a.metric("Ulasan",           f"{int(w_row['vote_count']):,} orang")
+    b.metric("Hotel Terdekat",   f"{int(w_row.get('jumlah_hotel_terdekat', 0))} hotel")
     st.divider()
-    st.info("💡 Ingin melihat rekomendasi hotel lengkap dan detail jaraknya khusus untuk destinasi ini?")
-    
-    if st.button("Lanjut ke Mode B (Cari Hotel Saja)", type="primary", use_container_width=True):
-        st.session_state.active_mode = "🔍 Belum punya hotel"
-        st.session_state.target_wisata = w_row['nama']
-        st.rerun() # Refresh halaman secara otomatis!
+    st.info("Ingin melihat rekomendasi hotel khusus untuk destinasi ini?")
+    if st.button("Cari Hotel untuk Destinasi Ini", type="primary", use_container_width=True):
+        st.session_state.active_mode   = "Belum punya hotel"
+        st.session_state.target_wisata = w_row["nama"]
+        st.rerun()
 
-# ── 3. SIDEBAR LOGIC ────────────────────────────────────────────────────────
+
+#SIDEBAR
 with st.sidebar:
     st.title("Panel Kendali")
-    
-    # Radio button sekarang nyambung ke Session State
-    mode_pilih = st.radio(
-        "Status Akomodasi", 
-        ["🏨 Sudah punya hotel", "🔍 Belum punya hotel", "🎒 Belum ada rencana"], 
-        key='active_mode',
-        label_visibility="collapsed"
-    )
-    MODE_A = mode_pilih.startswith("🏨")
-    MODE_B = mode_pilih.startswith("🔍")
-    MODE_C = mode_pilih.startswith("🎒")
+    st.caption("Atur preferensi perjalanan Anda.")
     st.divider()
 
-    hotel_pilih, wisata_pilih, hari_pilih = None, None, "Weekday"
-    radius_input, budget_min, budget_maks = 15.0, 0, 100000
-    kat_pilih, keyword_pilih = "Semua", ""
-    bobot_user, bobot_hotel, bobot_wisata_global, bobot_hotel_global = {}, {}, {}, {}
+    st.caption("STATUS AKOMODASI")
+    mode_pilih = st.radio(
+        "mode",
+        ["Sudah punya hotel", "Belum punya hotel", "Belum ada rencana"],
+        key="active_mode",
+        label_visibility="collapsed",
+    )
+    MODE_A = mode_pilih == "Sudah punya hotel"
+    MODE_B = mode_pilih == "Belum punya hotel"
+    MODE_C = mode_pilih == "Belum ada rencana"
+    st.divider()
 
+    # Default semua variabel
+    hotel_pilih = wisata_pilih = None
+    hari_pilih = "Weekday"
+    radius_input = 15.0
+    budget_min, budget_maks = 0, 100000
+    kat_pilih = "Semua"
+    keyword_pilih = ""
+    bobot_user = bobot_hotel = bobot_wisata_global = {}
+    bobot_hotel_global = {"JUMLAH KAMAR": 3, "GOLONGAN_SCORE": 3, "jarak_ke_wisata": 5, "estimasi_waktu_menit": 4}
+    filter_bintang_b = filter_bintang_c = [1, 2, 3, 4, 5]
+
+    #MODE A 
     if MODE_A:
-        hotel_pilih = st.selectbox("Hotel Menginap", df_hotel['NAMA PENGINAPAN'].dropna().unique().tolist())
-        radius_input = st.slider("Jarak Maksimal (KM)", 1.0, 50.0, 15.0, 0.5)
-        hari_pilih = st.radio("Hari Kunjungan", ["Weekday", "Weekend"], horizontal=True)
-        st.divider()
-        kat_pilih = st.selectbox("Kategori Wisata", ["Semua"] + df_wisata_final['type'].dropna().unique().tolist())
-        budget_maks = st.number_input(f"Budget Maks (Rp)", min_value=0, value=100000, step=5000)
-        keyword_pilih = st.text_input("Kata Kunci (Opsional)")
-        st.divider()
-        with st.expander("⚙️ Atur Bobot Kriteria", expanded=False):
-            bobot_user = {
-            'vote_average': st.slider("⭐ Rating", 1, 5, 4),
-            'harga_tiket': st.slider("💰 Harga", 1, 5, 4), 'jarak_ke_hotel': st.slider("📍 Jarak Hotel", 1, 5, 5),
-            'jarak_pusat_km': st.slider("🏙️ Jarak Pusat", 1, 5, 2)
-        }
+        st.caption("HOTEL MENGINAP")
+        hotel_list = sorted(df_hotel["NAMA PENGINAPAN"].dropna().unique().tolist())
+        hotel_pilih = search_selectbox("Cari hotel", hotel_list, key_prefix="hotel_a")
 
-    elif MODE_B:
-        # Menangkap data dari Mode C (Redirect)
-        wisata_list = df_wisata_final['nama'].dropna().sort_values().tolist()
-        def_idx = 0
-        if st.session_state.target_wisata in wisata_list:
-            def_idx = wisata_list.index(st.session_state.target_wisata)
-            
-        wisata_pilih = st.selectbox("Tujuan Wisata", wisata_list, index=def_idx)
         st.divider()
-        
+        radius_input = st.slider("Radius maksimal (km)", 1.0, 50.0, 15.0, 0.5)
+        hari_pilih   = st.radio("Hari kunjungan", ["Weekday", "Weekend"], horizontal=True)
+
+        st.divider()
+        st.caption("FILTER WISATA")
+        kat_pilih    = st.selectbox("Kategori", ["Semua"] + df_wisata_final["type"].dropna().unique().tolist())
+        budget_maks  = st.number_input("Budget tiket maks (Rp)", min_value=0, value=100000, step=5000)
+        keyword_pilih= st.text_input("Kata kunci", placeholder="Contoh: Candi, Pantai")
+
+        st.divider()
+        with st.expander("Bobot Kriteria (1–5)"):
+            st.caption("Geser untuk menyesuaikan prioritas.")
+            bobot_user = {
+                "vote_average":   st.slider("Rating",            1, 5, 4),
+                "vote_count":     st.slider("Popularitas",       1, 5, 3),
+                "harga_tiket":    st.slider("Harga Tiket",       1, 5, 4),
+                "jarak_ke_hotel": st.slider("Jarak dari Hotel",  1, 5, 5),
+                "jarak_pusat_km": st.slider("Jarak Pusat Kota",  1, 5, 2),
+            }
+
+    # MODE B
+    elif MODE_B:
+        st.caption("TUJUAN WISATA")
+        wisata_list = sorted(df_wisata_final["nama"].dropna().unique().tolist())
+        wisata_pilih = search_selectbox(
+            "Cari wisata", wisata_list,
+            default_value=st.session_state.target_wisata,
+            key_prefix="wisata_b",
+        )
+
+        st.divider()
+        st.caption("FILTER KELAS HOTEL")
         filter_bintang_b = st.multiselect(
-            "Filter Budget / Kelas Hotel",
+            "Kelas hotel",
             options=[1, 2, 3, 4, 5],
             default=[1, 2, 3, 4, 5],
-            format_func=lambda x: f"⭐ Bintang {x}"
+            format_func=lambda x: f"Kelas {x}",
         )
+
         st.divider()
-        st.write("Bobot Hotel (1-5)")
-        bobot_hotel = {
-            'JUMLAH KAMAR': st.slider("🛏️ Kapasitas Kamar", 1, 5, 3),
-            'GOLONGAN_SCORE': st.slider("🏅 Kelas Hotel", 1, 5, 4),
-            'jarak_ke_wisata': st.slider("📍 Jarak Wisata", 1, 5, 5),
-            'estimasi_waktu_menit': st.slider("⏱️ Waktu Tempuh", 1, 5, 4)
+        with st.expander("Bobot Kriteria Hotel (1–5)"):
+            bobot_hotel = {
+                "JUMLAH KAMAR":         st.slider("Kapasitas Kamar",  1, 5, 3),
+                "GOLONGAN_SCORE":       st.slider("Kelas Hotel",       1, 5, 4),
+                "jarak_ke_wisata":      st.slider("Jarak ke Wisata",   1, 5, 5),
+                "estimasi_waktu_menit": st.slider("Estimasi Waktu",    1, 5, 4),
+            }
+
+    #bODE C 
+    elif MODE_C:
+        st.caption("GAYA LIBURAN")
+        gaya = st.selectbox(
+            "Budget wisata",
+            ["Hemat  (< Rp 10.000)", "Menengah  (Rp 10–50 ribu)", "Eksklusif  (> Rp 50.000)"],
+        )
+        if gaya.startswith("Hemat"):
+            budget_min, budget_maks, def_w, bh_bintang = -1, 10000, [5,4,3,4,3], 1
+        elif gaya.startswith("Menengah"):
+            budget_min, budget_maks, def_w, bh_bintang = 10000, 50000, [3,3,4,4,4], 3
+        else:
+            budget_min, budget_maks, def_w, bh_bintang = 50000, 1_000_000, [1,2,5,5,5], 5
+
+        st.divider()
+        st.caption("FILTER DESTINASI")
+        kat_pilih     = st.selectbox("Kategori", ["Semua"] + df_wisata_final["type"].dropna().unique().tolist())
+        keyword_pilih = st.text_input("Kata kunci", placeholder="Contoh: Candi, Pantai")
+        filter_bintang_c = st.multiselect(
+            "Kelas hotel",
+            options=[1, 2, 3, 4, 5],
+            default=[1, 2] if gaya.startswith("Hemat") else ([3] if gaya.startswith("Menengah") else [4, 5]),
+            format_func=lambda x: f"Kelas {x}",
+        )
+
+        st.divider()
+        with st.expander("Bobot Kriteria Wisata (1–5)"):
+            bobot_wisata_global = {
+                "harga_tiket":           st.slider("Harga Tiket",        1, 5, def_w[0]),
+                "jarak_pusat_km":        st.slider("Jarak Pusat Kota",   1, 5, def_w[1]),
+                "jumlah_hotel_terdekat": st.slider("Hotel Terdekat",     1, 5, def_w[2]),
+                "vote_average":          st.slider("Rating",              1, 5, def_w[3]),
+                "vote_count":            st.slider("Popularitas",         1, 5, def_w[4]),
+            }
+        bobot_hotel_global = {
+            "JUMLAH KAMAR": 3, "GOLONGAN_SCORE": bh_bintang,
+            "jarak_ke_wisata": 5, "estimasi_waktu_menit": 4,
         }
 
-    elif MODE_C:
-        gaya_liburan = st.selectbox("Kategori Budget Wisata", ["🟢 Hemat (< Rp 10rb)", "🟡 Menengah (Rp 10rb - 50rb)", "🔵 Eksklusif (> Rp 50rb)"])
-        filter_bintang_c = st.multiselect(
-            "Filter Budget / Kelas Hotel",
-            options=[1, 2, 3, 4, 5],
-            default=[1, 2] if gaya_liburan.startswith("🟢") else ([3] if gaya_liburan.startswith("🟡") else [4, 5]),
-            format_func=lambda x: f"⭐ Bintang {x}"
-        )
-        st.divider()
-        kat_pilih = st.selectbox("Kategori Wisata", ["Semua"] + df_wisata_final['type'].dropna().unique().tolist())
-        keyword_pilih = st.text_input("Kata Kunci (Opsional)")
-        st.divider()
-        
-        if gaya_liburan.startswith("🟢"): budget_min, budget_maks, bh_bintang, def_w = -1, 10000, 1, [5, 4, 3, 4, 3]
-        elif gaya_liburan.startswith("🟡"): budget_min, budget_maks, bh_bintang, def_w = 10000, 50000, 3, [3, 3, 4, 4, 4]
-        else: budget_min, budget_maks, bh_bintang, def_w = 50000, 1000000, 5, [1, 2, 5, 5, 5]
 
-        with st.expander("Kustom Bobot Wisata (Edit)"):
-            bobot_wisata_global = {
-                'harga_tiket': st.slider("💰 Harga Tiket", 1, 5, def_w[0]), 'jarak_pusat_km': st.slider("🏙️ Jarak Pusat", 1, 5, def_w[1]),
-                'jumlah_hotel_terdekat': st.slider("🏨 Jml Hotel Terdekat", 1, 5, def_w[2]), 'vote_average': st.slider("⭐ Rating", 1, 5, def_w[3]),
-                'vote_count': st.slider("💬 Popularitas", 1, 5, def_w[4])
-            }
-        bobot_hotel_global = {'JUMLAH KAMAR': 3, 'GOLONGAN_SCORE': bh_bintang, 'jarak_ke_wisata': 5, 'estimasi_waktu_menit': 4}
+# ── HEADER ────────────────────────────────────────────────────────────────────
+col_ttl, col_stat = st.columns([3, 1])
+with col_ttl:
+    st.title("Jogja Tourism — SPK")
+    st.caption("Sistem Pendukung Keputusan · Metode Weighted Product · Reinnent Rasika Z & Tim")
+with col_stat:
+    with st.container(border=True):
+        a, b = st.columns(2)
+        a.metric("Hotel",  f"{len(df_hotel):,}")
+        b.metric("Wisata", f"{len(df_wisata_final):,}")
 
-# ── 4. MAIN CONTENT ─────────────────────────────────────────────────────────
-ui_header()
-tab1, tab2 = st.tabs(["✦ Rekomendasi", "✦ Peta Lokasi"])
+st.divider()
 
-with tab1:
-    if MODE_A:
-        ui_section("Rekomendasi Wisata Terbaik")
-        if st.button("Hitung Rekomendasi", type="primary"):
-            with st.spinner("Memproses..."):
-                hasil_mentah = rekomendasi_wisata_dari_hotel(hotel_pilih, bobot_user, budget_maks, kat_pilih, keyword_pilih, 'descending', hari_pilih)
-                hasil = hasil_mentah[hasil_mentah['jarak_ke_hotel'] <= radius_input]
 
-            if not hasil.empty:
-                juara = hasil.iloc[0]
-                ui_card_juara(1, juara.get('type','—'), juara['nama'], juara['Vector_V'])
+# ── TABS ──────────────────────────────────────────────────────────────────────
+if MODE_A:
+    tab1, tab2, tab3 = st.tabs(["Rekomendasi Wisata", "Peta Lokasi", "Sensitivitas Bobot"])
+else:
+    tab1, tab2 = st.tabs(["Rekomendasi Hotel" if MODE_B else "Paket Liburan", "Peta Lokasi"])
 
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("⭐ Rating", f"{juara['vote_average']:.1f}/5")
-                c2.metric("💬 Ulasan", f"{int(juara['vote_count']):,}")
-                c3.metric("💰 Harga", f"Rp {int(juara['harga_tiket']):,}")
-                c4.metric("📍 Jarak Hotel", f"{juara['jarak_ke_hotel']:.2f} km")
-                c5.metric("🏙️ Jarak Pusat", f"{juara['jarak_pusat_km']:.2f} km")
-                style_metric_cards(background_color="#1E1E1E", border_left_color="#6359FF", border_color="#333333", box_shadow=False)
 
-                st.divider()
-                col_radar, col_table = st.columns([1, 1], gap="large")
-                with col_radar:
-                    ui_section("Profil Atribut")
-                    draw_radar_chart(hasil_mentah, labels=['Rating', 'Popularitas', 'Harga', 'Jarak Hotel', 'Jarak Pusat'], keys=['vote_average', 'vote_count', 'harga_tiket', 'jarak_ke_hotel', 'jarak_pusat_km'], costs=[False, False, True, True, True])
-                with col_table:
-                    ui_section("Peringkat Lengkap", "Top 10 destinasi sesuai filter")
-                    # Pilih semua kriteria (5 kriteria + Ranking + Nama)
-                    df_show = hasil[['Ranking','nama','type','vote_average','vote_count','harga_tiket','jarak_ke_hotel','jarak_pusat_km','Vector_V']].head(10).copy()
-                    
-                    df_show.rename(columns={
-                        'Ranking':'#', 'nama':'Destinasi', 'type':'Kategori', 
-                        'vote_average':'Rating', 'vote_count':'Popularitas', 
-                        'harga_tiket':'Tiket', 'jarak_ke_hotel':'Jarak Hotel', 
-                        'jarak_pusat_km':'Jarak Pusat', 'Vector_V':'Skor'
-                    }, inplace=True)
-                    
-                    # Format angka biar cantik (1 angka belakang koma)
-                    df_show['Jarak Hotel'] = df_show['Jarak Hotel'].apply(lambda x: f"{x:.1f} km")
-                    df_show['Jarak Pusat'] = df_show['Jarak Pusat'].apply(lambda x: f"{x:.1f} km")
-                    df_show['Tiket'] = df_show['Tiket'].apply(lambda x: f"Rp {int(x):,}")
-                    df_show['Skor'] = df_show['Skor'].map('{:.4f}'.format)
-                    
-                    st.dataframe(df_show, use_container_width=True, hide_index=True)
-    elif MODE_B:
-        ui_section(f"Rekomendasi Hotel Sekitar: {wisata_pilih}")
-        if st.button("Cari Hotel Terbaik", type="primary"):
-            with st.spinner("Menghitung..."):
-                hasil_hotel = rekomendasi_hotel_dari_wisata(wisata_pilih, bobot_hotel, 'descending')
-                # Terapkan Filter Budget Bintang
-                if filter_bintang_b:
-                    hasil_hotel = hasil_hotel[hasil_hotel['GOLONGAN_SCORE'].isin(filter_bintang_b)]
 
-            if not hasil_hotel.empty:
-                juara = hasil_hotel.iloc[0]
-                ui_card_juara(1, "Akomodasi", juara['NAMA PENGINAPAN'], juara['Vector_V'], is_hotel=True)
+# MODE A
 
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("🏅 Kelas Hotel", "⭐" * int(juara['GOLONGAN_SCORE']))
-                c2.metric("🛏️ Kamar", f"{int(juara['JUMLAH KAMAR'])}")
-                c3.metric("📍 Jarak Wisata", f"{juara['jarak_ke_wisata']:.2f} km")
-                c4.metric("⏱️ Waktu Tempuh", f"{int(juara['estimasi_waktu_menit'])} mnt")
-                style_metric_cards(background_color="#1E1E1E", border_left_color="#FFB400", border_color="#333333", box_shadow=False)
+if MODE_A:
+    with tab1:
+        st.subheader("Rekomendasi Wisata Terbaik")
+        if hotel_pilih:
+            st.caption(f"Hotel: **{hotel_pilih}** · Radius: **{radius_input} km** · Hari: **{hari_pilih}**")
+        else:
+            st.warning("Pilih hotel terlebih dahulu di panel kiri.")
 
-                st.divider()
-                col_radar, col_table = st.columns([1, 1], gap="large")
-                with col_radar:
-                    ui_section("Profil Hotel")
-                    draw_radar_chart(hasil_hotel, labels=['Kapasitas Kamar', 'Kelas Hotel', 'Jarak ke Wisata', 'Estimasi Waktu'], keys=['JUMLAH KAMAR', 'GOLONGAN_SCORE', 'jarak_ke_wisata', 'estimasi_waktu_menit'], costs=[False, False, True, True])
-                with col_table:
-                    ui_section("Peringkat Lengkap", "Top 10 hotel terdekat")
-                    # Pilih semua kriteria (4 kriteria + Ranking + Nama)
-                    df_show = hasil_hotel[['Ranking','NAMA PENGINAPAN','GOLONGAN_SCORE','JUMLAH KAMAR','jarak_ke_wisata','estimasi_waktu_menit','Vector_V']].head(10).copy()
-                    
-                    df_show.rename(columns={
-                        'Ranking':'#', 'NAMA PENGINAPAN':'Hotel', 'GOLONGAN_SCORE':'Bintang', 
-                        'JUMLAH KAMAR':'Kamar', 'jarak_ke_wisata':'Jarak', 
-                        'estimasi_waktu_menit':'Waktu', 'Vector_V':'Skor'
-                    }, inplace=True)
-                    
-                    # Format angka biar cantik
-                    df_show['Jarak'] = df_show['Jarak'].apply(lambda x: f"{x:.1f} km")
-                    df_show['Waktu'] = df_show['Waktu'].apply(lambda x: f"{int(x)} mnt")
-                    df_show['Skor'] = df_show['Skor'].map('{:.4f}'.format)
-                    
-                    st.dataframe(df_show, use_container_width=True, hide_index=True)
+        if hotel_pilih and st.button("Hitung Rekomendasi", type="primary", use_container_width=True):
+            with st.spinner("Memproses algoritma Weighted Product…"):
+                hasil_mentah = rekomendasi_wisata_dari_hotel(
+                    hotel_pilih, bobot_user, budget_maks, kat_pilih, keyword_pilih, "descending", hari_pilih
+                )
+                hasil = hasil_mentah[hasil_mentah["jarak_ke_hotel"] <= radius_input]
+
+            if hasil.empty:
+                st.warning(f"Tidak ada destinasi dalam radius {radius_input} km dengan budget yang dipilih.")
             else:
-                st.warning("Tidak ada hotel yang sesuai dengan filter bintang Anda di sekitar area tersebut.")
+                juara = hasil.iloc[0]
+                with st.container(border=True):
+                    kol_badge, _ = st.columns([1, 4])
+                    kol_badge.success("Peringkat #1")
+                    st.subheader(juara["nama"])
+                    st.caption(f"{juara.get('type','—')}  ·  Skor WP: {juara['Vector_V']:.6f}")
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("Rating",       f"{juara['vote_average']:.1f} / 5")
+                    m2.metric("Ulasan",        f"{int(juara['vote_count']):,}")
+                    m3.metric("Harga",         f"Rp {int(juara['harga_tiket']):,}")
+                    m4.metric("Jarak Hotel",   f"{juara['jarak_ke_hotel']:.1f} km")
+                    m5.metric("Jarak Pusat",   f"{juara['jarak_pusat_km']:.1f} km")
 
-    elif MODE_C:
-        ui_section("📦 Rekomendasi Paket Liburan")
-        if st.button("Racik Paket Liburan", type="primary"):
-            with st.spinner("Menganalisis data se-Jogja..."):
-                st.session_state.hasil_paket = rekomendasi_wisata_global(bobot_wisata_global, kat_pilih, keyword_pilih, budget_min, budget_maks).head(5)
-                
-        # Menampilkan Tabel Paket yang Tersimpan di Session
+                st.divider()
+                col_c, col_t = st.columns([1, 1], gap="large")
+                with col_c:
+                    st.subheader("Profil Atribut")
+                    st.caption("Perbandingan top-2 rekomendasi (skala 0–100)")
+                    draw_radar_chart(
+                        hasil.head(2),
+                        labels=["Rating", "Popularitas", "Harga", "Jarak Hotel", "Jarak Pusat"],
+                        keys=["vote_average","vote_count","harga_tiket","jarak_ke_hotel","jarak_pusat_km"],
+                        costs=[False, False, True, True, True],
+                    )
+                with col_t:
+                    st.subheader("Peringkat Lengkap")
+                    st.caption(f"Top 10 dari {len(hasil)} destinasi yang memenuhi filter")
+                    df_show = hasil[["Ranking","nama","type","vote_average","harga_tiket",
+                                     "jarak_ke_hotel","jarak_pusat_km","Vector_V"]].head(10).copy()
+                    st.dataframe(
+                        df_show, use_container_width=True, hide_index=True,
+                        column_config={
+                            "Ranking":       st.column_config.NumberColumn("#",           width="small"),
+                            "nama":          st.column_config.TextColumn("Destinasi",     width="medium"),
+                            "type":          st.column_config.TextColumn("Kategori",      width="small"),
+                            "vote_average":  st.column_config.NumberColumn("Rating",      format="%.1f", width="small"),
+                            "harga_tiket":   st.column_config.NumberColumn("Harga (Rp)",  format="Rp %d", width="small"),
+                            "jarak_ke_hotel":st.column_config.NumberColumn("Jarak Hotel", format="%.1f km", width="small"),
+                            "jarak_pusat_km":st.column_config.NumberColumn("Jarak Pusat", format="%.1f km", width="small"),
+                            "Vector_V":      st.column_config.NumberColumn("Skor WP",     format="%.5f", width="small"),
+                        },
+                    )
+
+    with tab2:
+        st.subheader("Peta Persebaran Wisata")
+        st.caption("Merah = hotel Anda · Biru = rekomendasi destinasi terdekat")
+        if hotel_pilih and st.button("Tampilkan Peta", type="primary"):
+            with st.spinner("Memuat peta…"):
+                h_data = df_hotel[df_hotel["NAMA PENGINAPAN"] == hotel_pilih].iloc[0]
+                m = folium.Map(location=[h_data["Latitude"], h_data["Longitude"]], zoom_start=13)
+                folium.Marker(
+                    [h_data["Latitude"], h_data["Longitude"]],
+                    popup=hotel_pilih, tooltip="Hotel Anda",
+                    icon=folium.Icon(color="red", icon="home", prefix="fa"),
+                ).add_to(m)
+                peta_data = rekomendasi_wisata_dari_hotel(
+                    hotel_pilih, bobot_user, budget_maks, kat_pilih, keyword_pilih, "descending", hari_pilih
+                )
+                for _, row in peta_data[peta_data["jarak_ke_hotel"] <= radius_input].head(10).iterrows():
+                    folium.Marker(
+                        [row["latitude"], row["longitude"]],
+                        popup=f"#{int(row['Ranking'])}: {row['nama']}",
+                        tooltip=row["nama"],
+                        icon=folium.Icon(color="blue", icon="star", prefix="fa"),
+                    ).add_to(m)
+                st_folium(m, width=None, height=500, returned_objects=[])
+        elif not hotel_pilih:
+            st.info("Pilih hotel di panel kiri terlebih dahulu.")
+        else:
+            st.info("Tekan tombol di atas untuk memuat peta interaktif.")
+
+    with tab3:
+        st.subheader("Analisis Sensitivitas Bobot")
+        st.caption("Lihat pergeseran ranking jika bobot satu kriteria dinaikkan +2.")
+        if hotel_pilih:
+            label_kri = {
+                "vote_average":   "Rating",
+                "vote_count":     "Popularitas",
+                "harga_tiket":    "Harga Tiket",
+                "jarak_ke_hotel": "Jarak dari Hotel",
+                "jarak_pusat_km": "Jarak Pusat Kota",
+            }
+            kri_tes = st.selectbox(
+                "Kriteria yang diuji",
+                options=list(label_kri.keys()),
+                format_func=lambda k: label_kri[k],
+            )
+            if st.button("Jalankan Analisis", type="primary"):
+                with st.spinner("Menganalisis…"):
+                    tabel_sens = hitung_analisis_sensitivitas(hotel_pilih, bobot_user, kri_tes, delta=2, hari=hari_pilih)
+                st.info(f"Bobot **{label_kri[kri_tes]}** dinaikkan +2. Positif = ranking naik, negatif = turun.")
+                st.dataframe(
+                    tabel_sens, use_container_width=True, hide_index=True,
+                    column_config={
+                        "nama":             st.column_config.TextColumn("Destinasi"),
+                        "Rank_Awal":        st.column_config.NumberColumn("Rank Sebelum", width="small"),
+                        "Rank_Baru":        st.column_config.NumberColumn("Rank Sesudah", width="small"),
+                        "Perubahan_Posisi": st.column_config.NumberColumn("Perubahan",    width="small"),
+                    },
+                )
+        else:
+            st.info("Pilih hotel di panel kiri terlebih dahulu.")
+
+
+
+# MODE B
+elif MODE_B:
+    with tab1:
+        if not wisata_pilih:
+            st.info("Pilih destinasi tujuan di panel kiri.")
+        else:
+            info_w = df_wisata_final[df_wisata_final["nama"] == wisata_pilih].iloc[0]
+            with st.container(border=True):
+                st.caption("DESTINASI TUJUAN")
+                st.subheader(info_w["nama"])
+                ia, ib, ic, id_ = st.columns(4)
+                ia.metric("Kategori",       info_w.get("type", "—"))
+                ib.metric("Rating",         f"{info_w['vote_average']:.1f} / 5")
+                ic.metric("Hotel Terdekat", f"{int(info_w.get('jumlah_hotel_terdekat', 0))}")
+                id_.metric("Jarak Pusat",   f"{info_w['jarak_pusat_km']:.1f} km")
+
+            st.subheader("Rekomendasi Hotel Terdekat")
+            st.caption("Weighted Product · 4 kriteria: kelas, kapasitas, jarak, estimasi waktu tempuh")
+
+            if st.button("Cari Hotel Terbaik", type="primary", use_container_width=True):
+                with st.spinner("Menghitung rekomendasi hotel…"):
+                    hasil_hotel = rekomendasi_hotel_dari_wisata(wisata_pilih, bobot_hotel, "descending")
+                    if filter_bintang_b:
+                        hasil_hotel = hasil_hotel[hasil_hotel["GOLONGAN_SCORE"].isin(filter_bintang_b)]
+
+                if hasil_hotel.empty:
+                    st.warning("Tidak ada hotel yang sesuai filter kelas yang dipilih.")
+                else:
+                    juara_h = hasil_hotel.iloc[0]
+                    with st.container(border=True):
+                        kol_badge, _ = st.columns([1, 4])
+                        kol_badge.success("Hotel #1")
+                        st.subheader(juara_h["NAMA PENGINAPAN"])
+                        st.caption(f"{juara_h['GOLONGAN']}  ·  Skor WP: {juara_h['Vector_V']:.6f}")
+                        h1, h2, h3, h4 = st.columns(4)
+                        h1.metric("Golongan",       juara_h["GOLONGAN"])
+                        h2.metric("Jumlah Kamar",   f"{int(juara_h['JUMLAH KAMAR'])}")
+                        h3.metric("Jarak ke Wisata", f"{juara_h['jarak_ke_wisata']:.1f} km")
+                        h4.metric("Estimasi Waktu", f"{int(juara_h['estimasi_waktu_menit'])} menit")
+
+                    st.divider()
+                    col_c, col_t = st.columns([1, 1], gap="large")
+                    with col_c:
+                        st.subheader("Profil Hotel")
+                        st.caption("Perbandingan top-2 (skala 0–100)")
+                        draw_radar_chart(
+                            hasil_hotel.head(2),
+                            labels=["Kapasitas", "Kelas", "Jarak", "Waktu Tempuh"],
+                            keys=["JUMLAH KAMAR","GOLONGAN_SCORE","jarak_ke_wisata","estimasi_waktu_menit"],
+                            costs=[False, False, True, True],
+                        )
+                    with col_t:
+                        st.subheader("Peringkat Hotel")
+                        st.caption(f"Top 10 dari {len(hasil_hotel)} hotel")
+                        df_h = hasil_hotel[[
+                            "Ranking","NAMA PENGINAPAN","GOLONGAN","JUMLAH KAMAR",
+                            "jarak_ke_wisata","estimasi_waktu_menit","Vector_V"
+                        ]].head(10).copy()
+                        st.dataframe(
+                            df_h, use_container_width=True, hide_index=True,
+                            column_config={
+                                "Ranking":              st.column_config.NumberColumn("#",          width="small"),
+                                "NAMA PENGINAPAN":      st.column_config.TextColumn("Nama Hotel",   width="medium"),
+                                "GOLONGAN":             st.column_config.TextColumn("Golongan",     width="small"),
+                                "JUMLAH KAMAR":         st.column_config.NumberColumn("Kamar",      format="%d", width="small"),
+                                "jarak_ke_wisata":      st.column_config.NumberColumn("Jarak",      format="%.1f km", width="small"),
+                                "estimasi_waktu_menit": st.column_config.NumberColumn("Estimasi",   format="%d mnt", width="small"),
+                                "Vector_V":             st.column_config.NumberColumn("Skor WP",    format="%.5f", width="small"),
+                            },
+                        )
+
+    with tab2:
+        st.subheader("Peta Hotel Sekitar Wisata")
+        st.caption("Merah = destinasi tujuan · Biru = hotel rekomendasi")
+        if wisata_pilih and st.button("Tampilkan Peta", type="primary"):
+            with st.spinner("Memuat peta…"):
+                w_data = df_wisata_final[df_wisata_final["nama"] == wisata_pilih].iloc[0]
+                m = folium.Map(location=[w_data["latitude"], w_data["longitude"]], zoom_start=13)
+                folium.Marker(
+                    [w_data["latitude"], w_data["longitude"]],
+                    popup=wisata_pilih, tooltip="Destinasi Tujuan",
+                    icon=folium.Icon(color="red", icon="flag", prefix="fa"),
+                ).add_to(m)
+                for _, row in rekomendasi_hotel_dari_wisata(wisata_pilih, bobot_hotel).head(10).iterrows():
+                    folium.Marker(
+                        [row["Latitude"], row["Longitude"]],
+                        popup=f"#{int(row['Ranking'])}: {row['NAMA PENGINAPAN']}",
+                        tooltip=row["NAMA PENGINAPAN"],
+                        icon=folium.Icon(color="blue", icon="bed", prefix="fa"),
+                    ).add_to(m)
+                st_folium(m, width=None, height=500, returned_objects=[])
+        elif not wisata_pilih:
+            st.info("Pilih destinasi di panel kiri terlebih dahulu.")
+        else:
+            st.info("Tekan tombol di atas untuk memuat peta interaktif.")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# MODE C
+# ════════════════════════════════════════════════════════════════════════════
+else:
+    with tab1:
+        st.subheader("Paket Liburan Jogja")
+        st.caption("Sistem memilihkan destinasi terbaik sesuai gaya liburan, lengkap dengan opsi hotel terdekat.")
+
+        if st.button("Racik Paket Liburan", type="primary", use_container_width=True):
+            with st.spinner("Menganalisis data wisata se-Jogja…"):
+                st.session_state.hasil_paket = rekomendasi_wisata_global(
+                    bobot_wisata_global, kat_pilih, keyword_pilih, budget_min, budget_maks
+                ).head(5)
+
         if not st.session_state.hasil_paket.empty:
             st.divider()
-            
-            # HEADER TABEL (Desain Rapi Pakai Kolom)
-            h1, h2, h3, h4 = st.columns([2.5, 1, 3.5, 1])
-            h1.caption("📍 DESTINASI UTAMA")
-            h2.caption("🎟️ HARGA TIKET")
-            h3.caption("🏨 TOP 3 HOTEL TERDEKAT")
-            h4.caption("Aksi")
-            
-            # ISI TABEL
+            st.caption("TOP 5 PAKET REKOMENDASI")
+
             for i, (_, w_row) in enumerate(st.session_state.hasil_paket.iterrows()):
-                with st.container(border=True): # Bikin Border supaya menyerupai baris tabel
-                    c1, c2, c3, c4 = st.columns([2.5, 1, 3.5, 1], vertical_alignment="center")
-                    
-                    c1.write(f"**{w_row['nama']}**")
-                    c1.caption(f"⭐ {w_row['vote_average']}")
-                    
-                    c2.write(f"Rp {int(w_row['harga_tiket']):,}")
-                    
-                    # Logika Pencarian Top 3 Hotel sesuai Filter
-                    hasil_h = rekomendasi_hotel_dari_wisata(w_row['nama'], bobot_hotel_global)
-                    if filter_bintang_c:
-                        hasil_h = hasil_h[hasil_h['GOLONGAN_SCORE'].isin(filter_bintang_c)]
-                    
-                    top_3 = hasil_h.head(3)
-                    if top_3.empty:
-                        c3.warning("Tidak ada hotel sesuai filter.")
-                    else:
-                        hotels_txt = "\n".join([f"- {h['NAMA PENGINAPAN']} (⭐{int(h['GOLONGAN_SCORE'])})" for _, h in top_3.iterrows()])
-                        c3.markdown(hotels_txt)
-                    
-                    # TOMBOL POPUP
-                    if c4.button("🔍 Detail", key=f"btn_{i}", use_container_width=True):
+                with st.container(border=True):
+                    rank_col, detail_col, hotel_col, aksi_col = st.columns(
+                        [0.5, 2, 3, 0.8], vertical_alignment="center"
+                    )
+                    rank_col.subheader(f"#{i+1}")
+
+                    with detail_col:
+                        st.markdown(f"**{w_row['nama']}**")
+                        st.caption(
+                            f"{w_row.get('type','—')}  ·  "
+                            f"Rating {w_row['vote_average']}  ·  "
+                            f"Rp {int(w_row['harga_tiket']):,}  ·  "
+                            f"{w_row['jarak_pusat_km']:.1f} km dari pusat kota"
+                        )
+
+                    with hotel_col:
+                        hasil_h = rekomendasi_hotel_dari_wisata(w_row["nama"], bobot_hotel_global)
+                        if filter_bintang_c:
+                            hasil_h = hasil_h[hasil_h["GOLONGAN_SCORE"].isin(filter_bintang_c)]
+                        top3 = hasil_h.head(3)
+                        if top3.empty:
+                            st.caption("Tidak ada hotel sesuai kelas yang dipilih.")
+                        else:
+                            for _, h in top3.iterrows():
+                                st.caption(
+                                    f"{h['NAMA PENGINAPAN']}  ·  "
+                                    f"{h['jarak_ke_wisata']:.1f} km  ·  "
+                                    f"Kelas {int(h['GOLONGAN_SCORE'])}"
+                                )
+
+                    if aksi_col.button("Detail", key=f"detail_{i}", use_container_width=True):
                         popup_detail_wisata(w_row)
+        else:
+            st.info("Tekan tombol Racik Paket Liburan untuk memulai.")
 
-# ── TAB PETA ────────────────────────────────────────────────────────────────
-with tab2:
-    st.markdown("### MAPS - Visualisasi Lokasi & Rekomendasi")
-    if st.button("Generate Peta", type="primary"):
-        with st.spinner("Memuat Peta..."):
-            # Titik pusat Jogja
-            m = folium.Map(location=[-7.7956, 110.3695], zoom_start=13)
-            
-            # AMBIL DATA BERDASARKAN MODE
-            if MODE_A and hotel_pilih:
-                h = df_hotel[df_hotel['NAMA PENGINAPAN'] == hotel_pilih].iloc[0]
-                folium.Marker([h['Latitude'], h['Longitude']], popup=hotel_pilih, icon=folium.Icon(color="red", icon="home")).add_to(m)
-                hasil_peta = rekomendasi_wisata_dari_hotel(hotel_pilih, bobot_user, budget_maks, kat_pilih, keyword_pilih, 'descending', hari_pilih).head(10)
-                for _, row in hasil_peta.iterrows():
-                    folium.Marker([row['latitude'], row['longitude']], popup=f"{row['nama']} ({row['jarak_ke_hotel']:.1f} km)", icon=folium.Icon(color="blue", icon="star")).add_to(m)
-            
-            elif MODE_B and wisata_pilih:
-                w = df_wisata_final[df_wisata_final['nama'] == wisata_pilih].iloc[0]
-                folium.Marker([w['latitude'], w['longitude']], popup=wisata_pilih, icon=folium.Icon(color="red", icon="flag")).add_to(m)
-                hasil_peta = rekomendasi_hotel_dari_wisata(wisata_pilih, bobot_hotel).head(10)
-                for _, row in hasil_peta.iterrows():
-                    folium.Marker([row['Latitude'], row['Longitude']], popup=f"{row['NAMA PENGINAPAN']} ({row['jarak_ke_wisata']:.1f} km)", icon=folium.Icon(color="blue", icon="bed")).add_to(m)
-            
-            elif MODE_C:
-                hasil_peta = rekomendasi_wisata_global(bobot_wisata_global, kat_pilih, keyword_pilih, budget_min, budget_maks).head(10)
-                for _, w in hasil_peta.iterrows():
-                    folium.Marker([w['latitude'], w['longitude']], popup=w['nama'], icon=folium.Icon(color="green", icon="star")).add_to(m)
-
-            st_folium(m, width=None, height=500)
+    with tab2:
+        st.subheader("Peta Destinasi Paket")
+        st.caption("Hijau = destinasi dari paket yang sudah dihasilkan")
+        if st.button("Tampilkan Peta", type="primary"):
+            with st.spinner("Memuat peta…"):
+                m = folium.Map(location=[-7.7956, 110.3695], zoom_start=11)
+                if not st.session_state.hasil_paket.empty:
+                    for _, w in st.session_state.hasil_paket.iterrows():
+                        folium.Marker(
+                            [w["latitude"], w["longitude"]],
+                            popup=w["nama"], tooltip=w["nama"],
+                            icon=folium.Icon(color="green", icon="star", prefix="fa"),
+                        ).add_to(m)
+                st_folium(m, width=None, height=500, returned_objects=[])
+        else:
+            st.info("Hasilkan paket terlebih dahulu, lalu tekan tombol untuk melihat peta.")
