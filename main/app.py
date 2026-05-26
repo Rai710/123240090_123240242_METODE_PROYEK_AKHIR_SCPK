@@ -8,7 +8,7 @@ import seaborn as sns
 
 try:
     from main import (
-        df_hotel, df_wisata_final,
+        df_hotel, df_wisata_final, df_pariwisata,
         rekomendasi_wisata_dari_hotel,
         rekomendasi_hotel_dari_wisata,
         rekomendasi_wisata_global,
@@ -530,11 +530,17 @@ elif MODE_D:
             
     # --- TAB 2: DATASET MENTAH ---
     with tab_data:
-        st.subheader("Dataset Pariwisata (Cleaned)")
-        st.dataframe(df_wisata_final, use_container_width=True, height=350)
+        st.subheader("1. Dataset Wisata Gabungan (Fitur SPK)")
+        st.caption("Gabungan data dasar wisata dengan ekstraksi fitur geospasial.")
+        st.dataframe(df_wisata_final, use_container_width=True, height=250)
         
-        st.subheader("Dataset Hotel (Cleaned)")
-        st.dataframe(df_hotel, use_container_width=True, height=350)
+        st.subheader("2. Dataset Pariwisata (Fitur Ekstraksi Jarak)")
+        st.caption("Hasil perhitungan Haversine dari notebook pre-processing.")
+        st.dataframe(df_pariwisata, use_container_width=True, height=250)
+        
+        st.subheader("3. Dataset Hotel (Cleaned)")
+        st.caption("Data hotel bersih yang siap digunakan untuk kalkulasi jarak.")
+        st.dataframe(df_hotel, use_container_width=True, height=250)
         
     # --- TAB 3: VISUALISASI 3 GRAFIK (SYARAT WAJIB) ---
     with tab_grafik:
