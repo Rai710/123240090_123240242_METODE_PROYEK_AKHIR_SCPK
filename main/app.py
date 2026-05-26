@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # SESSION STATE
-if "active_mode"    not in st.session_state: st.session_state.active_mode    = "Sudah punya hotel"
+if "active_mode"    not in st.session_state: st.session_state.active_mode    = "Cari Pariwisata"
 if "target_wisata"  not in st.session_state: st.session_state.target_wisata  = None
 if "hasil_paket"    not in st.session_state: st.session_state.hasil_paket    = pd.DataFrame()
 
@@ -70,7 +70,7 @@ def popup_detail_wisata(w_row):
     st.divider()
     st.info("Ingin melihat rekomendasi hotel khusus untuk destinasi ini?")
     if st.button("Cari Hotel untuk Destinasi Ini", type="primary", use_container_width=True):
-        st.session_state.active_mode   = "Belum punya hotel"
+        st.session_state.active_mode   = "Cari Hotel"  
         st.session_state.target_wisata = w_row["nama"]
         st.rerun()
 
@@ -81,14 +81,14 @@ with st.sidebar:
     
     mode_pilih = st.radio(
         "mode",
-        ["Sudah punya hotel", "Belum punya hotel", "Belum ada rencana", "Data & Analitik"], # <-- PASTIKAN ADA 4 DI SINI
+        ["Cari Pariwisata", "Cari Hotel", "Belum Ada Tujuan", "Data & Analitik"], # <-- UBAH DI SINI
         key="active_mode",
         label_visibility="collapsed",
     )
     
-    MODE_A = mode_pilih == "Sudah punya hotel"
-    MODE_B = mode_pilih == "Belum punya hotel"
-    MODE_C = mode_pilih == "Belum ada rencana"
+    MODE_A = mode_pilih == "Cari Pariwisata"
+    MODE_B = mode_pilih == "Cari Hotel"
+    MODE_C = mode_pilih == "Belum Ada Tujuan"
     MODE_D = mode_pilih == "Data & Analitik"
     st.divider()
 
