@@ -210,8 +210,6 @@ with st.sidebar:
             "JUMLAH KAMAR": 3, "GOLONGAN_SCORE": bh_bintang,
             "jarak_ke_wisata": 5, "estimasi_waktu_menit": 4,
         }
-    elif MODE_D:
-        st.info("👉 Silakan lihat halaman utama (sebelah kanan) untuk melihat data dan analitik.")
 
 
 # HEADER
@@ -237,7 +235,7 @@ elif MODE_B:
 elif MODE_C:
     tab1, tab2 = st.tabs(["Paket Liburan", "Peta Lokasi"])
 elif MODE_D:
-    tab_profil, tab_data, tab_grafik = st.tabs(["👥 Profil Kelompok", "📂 Dataset Mentah", "📈 Visualisasi Analitik"])
+    tab_profil, tab_data, tab_grafik = st.tabs([" Profil Kelompok", " Dataset Mentah", " Visualisasi Analitik"])
 
 
 
