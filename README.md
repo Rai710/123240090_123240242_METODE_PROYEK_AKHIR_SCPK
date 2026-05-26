@@ -1,7 +1,3 @@
-Tentu, ini adalah draf `README.md` yang profesional, terstruktur, dan informatif untuk proyek Anda. Saya menyusunnya dengan gaya dokumentasi teknis yang disukai dalam proyek akhir atau portofolio.
-
----
-
 # Jogja Tourism SPK: Sistem Rekomendasi Pariwisata
 
 Sistem Pendukung Keputusan (SPK) untuk rekomendasi destinasi wisata dan akomodasi di Yogyakarta menggunakan metode **Weighted Product (WP)**. Sistem ini dirancang untuk membantu wisatawan dalam merencanakan perjalanan berdasarkan preferensi pribadi, anggaran, dan kedekatan lokasi.
